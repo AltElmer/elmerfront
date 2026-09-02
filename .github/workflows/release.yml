@@ -38,6 +38,7 @@ jobs:
           - target: windows-x86_64
             os: windows-2022
             mingw: true
+            msys-prefix: ucrt64
 
     steps:
       - uses: actions/checkout@v4
@@ -90,11 +91,33 @@ jobs:
           set -e
           d="dist/elmerfront-${{ matrix.target }}/bin"
           mkdir -p "$d"
-          for exe in "$d"/*.exe; do
-            [ -f "$exe" ] || continue
-            ldd "$exe" | awk '{print $3}' | grep -i '^/ucrt64/bin/' | while read -r dll; do
-              cp -n "$dll" "$d/" || true
+          echo "bundling into $d"
+          ls -l "$d" || true
+
+          # objdump, not ldd. ldd lives in MSYS2's msys environment and this
+          # job installs only the UCRT64 packages it asks for, so ldd was
+          # simply absent: the step died on its first command under set -e,
+          # before reaching any echo, and reported exit 1 with no output at
+          # all. objdump comes with binutils alongside the compiler.
+          #
+          # Repeated until nothing new is copied, because the DLLs have
+          # dependencies of their own and one pass only catches the first
+          # level.
+          pass=0
+          while : ; do
+            pass=$((pass+1))
+            before=$(ls "$d"/*.dll 2>/dev/null | wc -l)
+            for bin in "$d"/*.exe "$d"/*.dll; do
+              [ -f "$bin" ] || continue
+              objdump -p "$bin" | awk '/DLL Name:/ {print $3}' | while read -r dll; do
+                [ -f "/${{ matrix.msys-prefix }}/bin/$dll" ] || continue
+                cp -n "/${{ matrix.msys-prefix }}/bin/$dll" "$d/" 2>/dev/null || true
+              done
             done
+            after=$(ls "$d"/*.dll 2>/dev/null | wc -l)
+            echo "pass $pass: $before -> $after DLLs"
+            [ "$after" -gt "$before" ] || break
+            [ "$pass" -lt 8 ] || break
           done
           # Tcl and Tk load their own script libraries at run time, so the DLLs
           # alone are not enough. The directories are versioned, so they are
@@ -104,7 +127,7 @@ jobs:
           libdst="dist/elmerfront-${{ matrix.target }}/lib"
           mkdir -p "$libdst"
           found=0
-          for d2 in /ucrt64/lib/tcl[0-9]* /ucrt64/lib/tk[0-9]*; do
+          for d2 in /${{ matrix.msys-prefix }}/lib/tcl[0-9]* /${{ matrix.msys-prefix }}/lib/tk[0-9]*; do
             [ -d "$d2" ] || continue
             cp -r "$d2" "$libdst/" && found=$((found+1))
           done
