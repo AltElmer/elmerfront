@@ -32,9 +32,19 @@ jobs:
             os: ubuntu-24.04
             intel: true
             cmake-extra: -DCMAKE_CXX_COMPILER=icpx -DCMAKE_C_COMPILER=icx
-          - name: macos-arm64 (clang)
-            os: macos-14
-            brew: true
+          # macOS is absent on purpose, and not for want of trying.
+          #
+          # ElmerFront's non-Windows path is an X11 program: ecif_def.h
+          # includes <X11/Xlib.h> whenever WIN32 is undefined, and the renderer
+          # and the Tcl interface use Display, Window and Visual directly, 31
+          # and 26 times respectively, to put a GL context inside a Tk window.
+          # macOS has no X11, and Homebrew's Tcl/Tk is an Aqua build, so even
+          # with XQuartz installed the Tk it would link against is the wrong
+          # one. Supporting macOS means porting the renderer and the UI to
+          # Cocoa, which is a project rather than a CI setting.
+          #
+          # Listing it as a broken job would suggest it is nearly working. It
+          # is not, and the README says so.
           - name: windows-x86_64 (mingw)
             os: windows-2022
             mingw: true
@@ -69,20 +79,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y intel-oneapi-compiler-dpcpp-cpp
           echo "/opt/intel/oneapi/compiler/latest/bin" >> "$GITHUB_PATH"
-
-      # tcl-tk@8, not tcl-tk: Homebrew's unversioned formula is Tcl/Tk 9 now,
-      # and this code is written against the 8.x API. Both are keg-only, so
-      # the prefix has to be handed to CMake explicitly rather than assumed to
-      # be on the default search path.
-      - name: dependencies (macos)
-        if: matrix.brew
-        run: |
-          brew install tcl-tk@8
-          prefix=$(brew --prefix tcl-tk@8)
-          echo "tcl-tk@8 prefix: $prefix"
-          ls "$prefix/include" | head
-          echo "CMAKE_PREFIX_PATH=$prefix" >> "$GITHUB_ENV"
-          echo "TCL_ROOT=$prefix" >> "$GITHUB_ENV"
 
       - name: dependencies (mingw)
         if: matrix.mingw

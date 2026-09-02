@@ -64,10 +64,16 @@ Needs CMake 3.16, a C and a C++ compiler, OpenGL, GLU and Tcl/Tk. On Debian and 
 
 | | |
 | --- | --- |
-| GCC, Clang, **Intel `icpx`**, MinGW-w64 | full program, tested |
+| GCC, Clang, **Intel `icpx`**, MinGW-w64 | full program, tested on Linux x86_64 and arm64 and on Windows |
 | MSVC, clang-cl | core library only |
 
 MSVC and clang-cl build the core cleanly and are not excluded on merit: neither has a Tcl/Tk development package installable in a CI job without building Tcl first. That is a gap, and it is listed as its own CI job rather than quietly dropped from the matrix.
+
+### macOS does not work, and it is not close
+
+Worth stating plainly rather than leaving as an empty row. **ElmerFront's non-Windows path is an X11 program.** `ecif_def.h` includes `<X11/Xlib.h>` whenever `WIN32` is undefined, and the renderer and the Tcl interface use `Display`, `Window` and `Visual` directly — 31 and 26 references respectively — to put a GL context inside a Tk window.
+
+macOS has no X11, and Homebrew's Tcl/Tk is an Aqua build, so even with XQuartz installed the Tk it would link against is the wrong one. Making macOS work means porting the renderer and the interface to Cocoa. That is a project, not a CI setting, and pretending otherwise by leaving a permanently red job in the matrix would misrepresent how far away it is.
 
 ## Tests
 
