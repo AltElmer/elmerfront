@@ -70,9 +70,19 @@ jobs:
           sudo apt-get install -y intel-oneapi-compiler-dpcpp-cpp
           echo "/opt/intel/oneapi/compiler/latest/bin" >> "$GITHUB_PATH"
 
+      # tcl-tk@8, not tcl-tk: Homebrew's unversioned formula is Tcl/Tk 9 now,
+      # and this code is written against the 8.x API. Both are keg-only, so
+      # the prefix has to be handed to CMake explicitly rather than assumed to
+      # be on the default search path.
       - name: dependencies (macos)
         if: matrix.brew
-        run: brew install tcl-tk
+        run: |
+          brew install tcl-tk@8
+          prefix=$(brew --prefix tcl-tk@8)
+          echo "tcl-tk@8 prefix: $prefix"
+          ls "$prefix/include" | head
+          echo "CMAKE_PREFIX_PATH=$prefix" >> "$GITHUB_ENV"
+          echo "TCL_ROOT=$prefix" >> "$GITHUB_ENV"
 
       - name: dependencies (mingw)
         if: matrix.mingw
@@ -88,12 +98,20 @@ jobs:
 
       - name: build and test
         if: '!matrix.mingw'
+        shell: bash
         run: |
-          source /opt/intel/oneapi/setvars.sh 2>/dev/null || true
+          # Sourced only when it exists. "source missing-file || true" under
+          # set -e behaves differently across shells and hides why a step died.
+          if [ -f /opt/intel/oneapi/setvars.sh ]; then
+            set +u
+            . /opt/intel/oneapi/setvars.sh
+            set -u
+          fi
+          echo "compilers: $(command -v cc) $(command -v c++)"
+          echo "cmake: $(cmake --version | head -1)"
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake-extra }}
           cmake --build build --config Release
           ctest --test-dir build -C Release --output-on-failure
-        shell: bash
 
       - name: build and test (mingw)
         if: matrix.mingw
@@ -138,6 +156,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      # X11 headers, even though the core needs neither OpenGL nor Tcl/Tk.
+      # ecif_def.h includes <X11/Xlib.h> for the whole program whenever WIN32
+      # is not defined, so on Unix the "platform neutral" sources are neutral
+      # about the toolkit but not about the window system. That is how the
+      # code has always been; noting it here rather than describing the core
+      # as more portable than it is.
+      - name: x11 headers (linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev
 
       - name: build the core library only
         run: |

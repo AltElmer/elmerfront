@@ -58,7 +58,7 @@ ctest --test-dir build --output-on-failure
 
 Needs CMake 3.16, a C and a C++ compiler, OpenGL, GLU and Tcl/Tk. On Debian and Ubuntu that is `libgl1-mesa-dev libglu1-mesa-dev tcl-dev tk-dev libx11-dev`; on macOS `brew install tcl-tk`; under MSYS2 UCRT64, `mingw-w64-ucrt-x86_64-tcl` and `-tk`.
 
-`-DELMERFRONT_BUILD_GUI=OFF` builds only `elmerfront_core`, the 59 platform-neutral sources, with no OpenGL or Tcl/Tk needed at all.
+`-DELMERFRONT_BUILD_GUI=OFF` builds only `elmerfront_core`, the 59 platform-neutral sources, with no OpenGL and no Tcl/Tk. On Unix it still needs X11 headers, because `ecif_def.h` includes `<X11/Xlib.h>` for the whole program whenever `WIN32` is not defined: the core is neutral about the toolkit, not about the window system. On Windows it needs nothing beyond a compiler, which is why MSVC can build it.
 
 ### Which compilers
 
