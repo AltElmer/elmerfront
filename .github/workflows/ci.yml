@@ -32,22 +32,49 @@ jobs:
             os: ubuntu-24.04
             intel: true
             cmake-extra: -DCMAKE_CXX_COMPILER=icpx -DCMAKE_C_COMPILER=icx
-          # macOS is absent on purpose, and not for want of trying.
-          #
-          # ElmerFront's non-Windows path is an X11 program: ecif_def.h
-          # includes <X11/Xlib.h> whenever WIN32 is undefined, and the renderer
-          # and the Tcl interface use Display, Window and Visual directly, 31
-          # and 26 times respectively, to put a GL context inside a Tk window.
-          # macOS has no X11, and Homebrew's Tcl/Tk is an Aqua build, so even
-          # with XQuartz installed the Tk it would link against is the wrong
-          # one. Supporting macOS means porting the renderer and the UI to
-          # Cocoa, which is a project rather than a CI setting.
-          #
-          # Listing it as a broken job would suggest it is nearly working. It
-          # is not, and the README says so.
           - name: windows-x86_64 (mingw)
             os: windows-2022
             mingw: true
+            msystem: UCRT64
+            msys-packages: >-
+              mingw-w64-ucrt-x86_64-gcc
+              mingw-w64-ucrt-x86_64-cmake
+              mingw-w64-ucrt-x86_64-ninja
+              mingw-w64-ucrt-x86_64-tcl
+              mingw-w64-ucrt-x86_64-tk
+          # Native arm64 Windows, with the GUI. An earlier version of this file
+          # said the GUI could not be built here because Tcl/Tk had no arm64
+          # Windows package. MSYS2's arm64 environment has both, which the
+          # ElmerPost work turned up; the claim was wrong and only ever tested
+          # against MSVC, which is a different question.
+          - name: windows-arm64 (clang)
+            os: windows-11-arm
+            mingw: true
+            msystem: CLANGARM64
+            msys-packages: >-
+              mingw-w64-clang-aarch64-clang
+              mingw-w64-clang-aarch64-cmake
+              mingw-w64-clang-aarch64-ninja
+              mingw-w64-clang-aarch64-tcl
+              mingw-w64-clang-aarch64-tk
+          # macOS, through XQuartz, using the recipe proven on ElmerPost.
+          # ElmerFront's non-Windows path is an X11 program and macOS has
+          # neither X11 nor an X11 Tk; both are obtainable, which makes this a
+          # cost rather than the impossibility this file used to claim.
+          - name: macos-arm64 (clang, xquartz)
+            os: macos-14
+            macos-x11: true
+            cmake-extra: >-
+              -DOPENGL_INCLUDE_DIR=/opt/X11/include
+              -DOPENGL_gl_LIBRARY=/opt/X11/lib/libGL.dylib
+              -DOPENGL_glu_LIBRARY=/opt/X11/lib/libGLU.dylib
+          - name: macos-x86_64 (clang, xquartz)
+            os: macos-15-intel
+            macos-x11: true
+            cmake-extra: >-
+              -DOPENGL_INCLUDE_DIR=/opt/X11/include
+              -DOPENGL_gl_LIBRARY=/opt/X11/lib/libGL.dylib
+              -DOPENGL_glu_LIBRARY=/opt/X11/lib/libGLU.dylib
 
     steps:
       - uses: actions/checkout@v4
@@ -84,13 +111,61 @@ jobs:
         if: matrix.mingw
         uses: msys2/setup-msys2@v2
         with:
-          msystem: UCRT64
-          install: >-
-            mingw-w64-ucrt-x86_64-gcc
-            mingw-w64-ucrt-x86_64-cmake
-            mingw-w64-ucrt-x86_64-ninja
-            mingw-w64-ucrt-x86_64-tcl
-            mingw-w64-ucrt-x86_64-tk
+          msystem: ${{ matrix.msystem }}
+          install: ${{ matrix.msys-packages }}
+
+      # Homebrew's Tcl/Tk is Aqua and ElmerFront needs the X11 build, so Tk is
+      # compiled against XQuartz. Same recipe as AltElmer/ElmerPost, where it
+      # is already green on both macOS architectures.
+      - name: cache the X11 Tcl/Tk (macos)
+        if: matrix.macos-x11
+        id: tcltk-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/tcltk-x11
+          key: tcltk-x11-8.6.14-${{ matrix.os }}-v1
+
+      - name: xquartz (macos)
+        if: matrix.macos-x11
+        run: |
+          brew install --cask xquartz
+          test -f /opt/X11/include/X11/Xlib.h || { echo "::error::XQuartz did not provide X11 headers"; exit 1; }
+          test -f /opt/X11/include/GL/gl.h || { echo "::error::XQuartz did not provide GL/gl.h"; exit 1; }
+          ls /opt/X11/lib/libGL* || { echo "::error::XQuartz did not provide libGL"; exit 1; }
+          echo "XQuartz provides X11, GL headers and libGL"
+
+      - name: build an X11 Tcl/Tk (macos)
+        if: matrix.macos-x11 && steps.tcltk-cache.outputs.cache-hit != 'true'
+        run: |
+          set -e
+          V=8.6.14
+          PREFIX="$HOME/tcltk-x11"
+          mkdir -p "$RUNNER_TEMP/tcltk" && cd "$RUNNER_TEMP/tcltk"
+          curl -fsSL -o tcl.tar.gz "https://downloads.sourceforge.net/project/tcl/Tcl/$V/tcl$V-src.tar.gz"
+          curl -fsSL -o tk.tar.gz  "https://downloads.sourceforge.net/project/tcl/Tcl/$V/tk$V-src.tar.gz"
+          tar xzf tcl.tar.gz && tar xzf tk.tar.gz
+          ( cd "tcl$V/unix" && ./configure --prefix="$PREFIX" >/dev/null && make -j3 >/dev/null && make install >/dev/null )
+          # --enable-aqua=no is what makes this the X11 Tk rather than the
+          # native one Homebrew ships.
+          ( cd "tk$V/unix" && ./configure --prefix="$PREFIX" --with-tcl="$PREFIX/lib" \
+              --enable-aqua=no --x-includes=/opt/X11/include --x-libraries=/opt/X11/lib >/dev/null \
+            && make -j3 >/dev/null && make install >/dev/null )
+
+      - name: the Tk built must be the X11 one (macos)
+        if: matrix.macos-x11
+        run: |
+          set -e
+          PREFIX="$HOME/tcltk-x11"
+          lib=$(ls "$PREFIX"/lib/libtk8.6* | head -1)
+          otool -L "$lib" | grep -qi 'libX11' \
+            || { echo "::error::Tk does not link libX11; it came out as the Aqua build"; otool -L "$lib"; exit 1; }
+          echo "ok: Tk links libX11, so it is the X11 build"
+          tcllib=$(ls "$PREFIX"/lib/libtcl8.6* | head -1)
+          tklib=$(ls "$PREFIX"/lib/libtk8.6* | head -1)
+          {
+            echo "MAC_TCLTK_ARGS=-DTCL_INCLUDE_PATH=$PREFIX/include -DTK_INCLUDE_PATH=$PREFIX/include -DTCL_LIBRARY=$tcllib -DTK_LIBRARY=$tklib -DTCL_TCLSH=$PREFIX/bin/tclsh8.6"
+            echo "MAC_TCLTK_PREFIX=$PREFIX"
+          } >> "$GITHUB_ENV"
 
       - name: build and test
         if: '!matrix.mingw'
@@ -105,7 +180,24 @@ jobs:
           fi
           echo "compilers: $(command -v cc) $(command -v c++)"
           echo "cmake: $(cmake --version | head -1)"
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake-extra }}
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake-extra }} ${MAC_TCLTK_ARGS:-}
+
+          # On macOS, prove the configure used the X11 Tcl/Tk built above and
+          # not Apple's framework. CMP0074 is unset at this project's
+          # cmake_minimum_required, so hints passed through TCL_ROOT are
+          # ignored and FindTCL silently picks the framework in the Xcode SDK.
+          # Without this check the job can go green having linked the Aqua Tk,
+          # which is the one thing the XQuartz work exists to avoid.
+          if [ -n "${MAC_TCLTK_PREFIX:-}" ]; then
+            used=$(grep -E '^(TCL|TK)_(LIBRARY|INCLUDE_PATH):' build/CMakeCache.txt || true)
+            echo "$used"
+            echo "$used" | grep -qi 'framework' \
+              && { echo "::error::configure picked Apple's Tcl/Tk framework, not the X11 build"; exit 1; }
+            echo "$used" | grep -q "${MAC_TCLTK_PREFIX:-}" \
+              || { echo "::error::Tcl/Tk did not come from ${MAC_TCLTK_PREFIX:-}"; exit 1; }
+            echo "ok: using the X11 Tcl/Tk from ${MAC_TCLTK_PREFIX:-}"
+          fi
+
           cmake --build build --config Release
           ctest --test-dir build -C Release --output-on-failure
 

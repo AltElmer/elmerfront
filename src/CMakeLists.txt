@@ -64,7 +64,13 @@ TARGET_INCLUDE_DIRECTORIES(ElmerFront PRIVATE
   ${TCL_INCLUDE_PATH}
   ${TK_INCLUDE_PATH})
 
-IF(UNIX AND NOT APPLE)
+# UNIX, including APPLE. This was written "UNIX AND NOT APPLE" when macOS was
+# thought to be out of reach, which excluded exactly the platform that needs
+# it most: on Linux libX11 sits in a default search path and would very nearly
+# be found anyway, while on macOS it comes from XQuartz under /opt/X11 and
+# nothing finds it by accident. X11::X11 carries both the include directory
+# and the library path, so it works on either.
+IF(UNIX)
   FIND_PACKAGE(X11 REQUIRED)
   TARGET_LINK_LIBRARIES(ElmerFront PRIVATE X11::X11)
   TARGET_LINK_LIBRARIES(elmerfront_core PUBLIC X11::X11)
