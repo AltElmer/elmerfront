@@ -145,6 +145,12 @@ jobs:
           - name: windows-x86_64 (clang-cl)
             os: windows-2022
             cmake-extra: -T ClangCL
+          # Native arm64 Windows. The core needs nothing beyond a compiler on
+          # Windows, so it builds here for the same reason MSVC can build it at
+          # all. The GUI does not: Tcl/Tk has no arm64 Windows development
+          # package to install in a job.
+          - name: windows-arm64 (msvc)
+            os: windows-11-arm
           - name: linux-x86_64 (gcc)
             os: ubuntu-24.04
 
