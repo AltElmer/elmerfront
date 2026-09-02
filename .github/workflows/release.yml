@@ -262,15 +262,36 @@ jobs:
           echo "--- running from an unrelated working directory ---"
           runlog="$RUNNER_TEMP/elmerfront-run.log"
           abs_exe=$(cd "$(dirname "$exe")" && pwd)/$(basename "$exe")
-          ( cd "$RUNNER_TEMP" && timeout 25 "$abs_exe" > "$runlog" 2>&1 ) || true
-          cat "$runlog" || true
-          if grep -qi 'not found' "$runlog"; then
+
+          # No timeout(1). It is GNU coreutils and macOS does not have it, so
+          # the command never ran there and the log contained the shell's own
+          # "timeout: command not found". The check below then matched that
+          # against a bare grep for "not found" and reported that the program
+          # could not find its scripts, which is a verifier diagnosing its own
+          # failure as the fault it was looking for. Backgrounded and killed
+          # instead, which works the same everywhere.
+          ( cd "$RUNNER_TEMP" && "$abs_exe" > "$runlog" 2>&1 & echo $! > "$RUNNER_TEMP/ef.pid" ) || true
+          sleep 20
+          if [ -f "$RUNNER_TEMP/ef.pid" ]; then kill "$(cat "$RUNNER_TEMP/ef.pid")" 2>/dev/null || true; fi
+          echo "--- output ---"; cat "$runlog" 2>/dev/null || true; echo "--- end ---"
+
+          # The program has to have run at all. An empty log means the launch
+          # failed and nothing below would be meaningful.
+          [ -s "$runlog" ] || { echo "::error::the program produced no output; it did not run"; exit 1; }
+
+          # The specific message, not a bare "not found" that any unrelated
+          # error can satisfy.
+          if grep -q 'Script ecif_tcl_mainScript.tcl not found' "$runlog"; then
             echo "::error::the program could not find its scripts when run from elsewhere"
             exit 1
           fi
-          grep -qi 'Setting up paths\|Running Elmer Front' "$runlog" \
-            || { echo "::error::the program did not reach its start-up"; exit 1; }
-          echo "ok: starts from any directory"
+
+          # Positive evidence that the executable-relative search is the one
+          # that found them: the path it reports has to be under the install
+          # tree, not the working directory it was launched from.
+          grep -q "$(cd "$d" && pwd)" "$runlog" \
+            || { echo "::error::the program never looked inside its own installation"; exit 1; }
+          echo "ok: finds its scripts relative to the executable, from any directory"
           echo "binary: $exe"
           { ls -lR "$d" || true; } | head -40 || true
 
