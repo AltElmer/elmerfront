@@ -287,10 +287,45 @@ jobs:
           fi
 
           # Positive evidence that the executable-relative search is the one
-          # that found them: the path it reports has to be under the install
-          # tree, not the working directory it was launched from.
-          grep -q "$(cd "$d" && pwd)" "$runlog" \
-            || { echo "::error::the program never looked inside its own installation"; exit 1; }
+          # that found them: the path the program reports has to name the
+          # install directory, which the working directory it was launched
+          # from does not.
+          #
+          # Matched on the install directory's own name rather than on its
+          # full path. The full path cannot be compared across a shell and a
+          # native Windows program: the program prints what GetModuleFileNameA
+          # gave it, D:\a\...\elmerfront-windows-x86_64\bin/../share/...,
+          # while $(cd "$d" && pwd) in MSYS is /d/a/.../elmerfront-windows-x86_64.
+          # Those never match, so this check failed on Windows while the log
+          # sitting next to it showed the program finding its scripts exactly
+          # as intended. A directory name carries the same evidence and does
+          # not depend on which of the two spellings a path arrives in.
+          start=$(grep -m1 '^Start script=' "$runlog" || true)
+          [ -n "$start" ] || { echo "::error::the program never reported which script it started"; exit 1; }
+          echo "reported: $start"
+
+          case "$start" in
+            *"$(basename "$d")"*) ;;
+            *) echo "::error::the program never looked inside its own installation"; exit 1 ;;
+          esac
+
+          # And it must not have been satisfied by the working directory. The
+          # first candidates the program tries are ./ relative, so a run that
+          # picked one of those would report a path starting with "./" -- which
+          # is what happened before the executable-relative search existed, and
+          # is the case this whole job is here to catch.
+          case "$start" in
+            "Start script=./"*)
+              echo "::error::it used a path relative to the working directory, not to itself"
+              exit 1 ;;
+          esac
+
+          # The control. If the program did not try the working directory
+          # first, then the check above could pass without ever having been
+          # able to fail, and this job would be proving nothing.
+          grep -q '^Trying \./' "$runlog" \
+            || { echo "::error::the program never tried a working-directory path, so the check above is vacuous"; exit 1; }
+
           echo "ok: finds its scripts relative to the executable, from any directory"
           echo "binary: $exe"
           { ls -lR "$d" || true; } | head -40 || true
