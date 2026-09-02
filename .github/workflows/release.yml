@@ -248,6 +248,29 @@ jobs:
           [ -n "$exe" ] || { echo "::error::no ElmerFront binary in the archive"; exit 1; }
           find "$d" -name 'ecif_tcl_mainScript.tcl' | grep -q . \
             || { echo "::error::no tcl scripts in the archive; ElmerFront would start and do nothing"; exit 1; }
+
+          # An archive can contain the script and the program still not find
+          # it. The v5.5.0 Windows archive did exactly that: the file was
+          # present under share/elmerfront/tcl and the binary looked only in
+          # the working directory and at an absolute path fixed at build time,
+          # so it wrote "Script ecif_tcl_mainScript.tcl not found!" and quit.
+          # The check above passed the whole time, because it asked whether
+          # the file existed rather than whether the program could use it.
+          #
+          # So: run it, from a directory that is not its own, and require that
+          # it gets past the script search.
+          echo "--- running from an unrelated working directory ---"
+          runlog="$RUNNER_TEMP/elmerfront-run.log"
+          abs_exe=$(cd "$(dirname "$exe")" && pwd)/$(basename "$exe")
+          ( cd "$RUNNER_TEMP" && timeout 25 "$abs_exe" > "$runlog" 2>&1 ) || true
+          cat "$runlog" || true
+          if grep -qi 'not found' "$runlog"; then
+            echo "::error::the program could not find its scripts when run from elsewhere"
+            exit 1
+          fi
+          grep -qi 'Setting up paths\|Running Elmer Front' "$runlog" \
+            || { echo "::error::the program did not reach its start-up"; exit 1; }
+          echo "ok: starts from any directory"
           echo "binary: $exe"
           { ls -lR "$d" || true; } | head -40 || true
 

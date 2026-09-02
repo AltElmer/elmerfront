@@ -42,6 +42,49 @@ Abstract:   Implementation
 // Otherwise conflicts with Windows and Stl
 #include "ecif_userinterface.h"
 #include "ecif_userinterface_TCL.h"
+
+#if defined(WIN32)
+  #include <windows.h>
+#elif defined(__APPLE__)
+  #include <mach-o/dyld.h>
+#else
+  #include <unistd.h>
+#endif
+
+// Where is this executable?
+//
+// Used to find the Tcl scripts and definition files relative to the program
+// rather than relative to the working directory or to an absolute path baked
+// in at build time. Writes the directory, without a trailing separator, and
+// returns true when it managed to.
+static bool
+getExecutableDirectory(char* buffer, int buffer_len)
+{
+  if (buffer == NULL || buffer_len < 2) return false;
+  buffer[0] = '\0';
+
+#if defined(WIN32)
+  DWORD n = GetModuleFileNameA(NULL, buffer, (DWORD)buffer_len);
+  if (n == 0 || (int)n >= buffer_len) return false;
+#elif defined(__APPLE__)
+  uint32_t size = (uint32_t)buffer_len;
+  if (_NSGetExecutablePath(buffer, &size) != 0) return false;
+#else
+  ssize_t n = readlink("/proc/self/exe", buffer, buffer_len - 1);
+  if (n <= 0) return false;
+  buffer[n] = '\0';
+#endif
+
+  // Strip the file name, leaving the directory. Both separators are checked
+  // because a Windows path can contain either.
+  int last = -1;
+  for (int i = 0; buffer[i] != '\0'; ++i) {
+    if (buffer[i] == '/' || buffer[i] == '\\') last = i;
+  }
+  if (last <= 0) return false;
+  buffer[last] = '\0';
+  return true;
+}
 // END NOTE
 
 #include "ecif_body.h"
@@ -5243,6 +5286,38 @@ UserInterface_TCL::start(int argc, char** argv)
     printf("Trying %s\n",file_buffer);
     if ( NULL != fopen(file_buffer, "r") ) {
       path_found = true;
+    }
+  }
+
+  //-2b. try relative to the executable itself
+  //
+  // Without this the program is not relocatable. The searches above are
+  // relative to the working directory, and the fallback further down is
+  // ELMER_FRONT_PREFIX, an absolute path fixed at build time. A binary
+  // unpacked anywhere else therefore reports
+  //
+  //   Can't run Elmer Front program.
+  //   Script ecif_tcl_mainScript.tcl not found!
+  //
+  // unless the user happens to be standing in the right directory or has set
+  // ELMER_FRONT_HOME. Asking the operating system where this executable is
+  // and looking beside it makes the installed tree work wherever it is put,
+  // which is what a portable archive means.
+  if (!path_found) {
+    char exe_dir[emf_MAX_STRING_LEN];
+    if (getExecutableDirectory(exe_dir, emf_MAX_STRING_LEN)) {
+      // bin/ElmerFront -> ../share/elmerfront/tcl, the install layout, then
+      // ./tcl beside the binary for a build tree.
+      const char* rel[] = { "/../share/elmerfront/tcl/", "/tcl/", "/" };
+      for (int i = 0; i < 3 && !path_found; ++i) {
+        file_strm.seekp(0);
+        lib_strm.seekp(0);
+        file_strm << exe_dir << rel[i] << controlSideScript << ends;
+        lib_strm  << exe_dir << rel[i] << ends;
+        printf("Trying %s\n", file_buffer);
+        FILE* fp = fopen(file_buffer, "r");
+        if (NULL != fp) { fclose(fp); path_found = true; }
+      }
     }
   }
 
