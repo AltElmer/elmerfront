@@ -1,0 +1,155 @@
+name: release
+
+# Builds ElmerFront for each supported platform and attaches the archives to
+# the release for the tag that triggered it.
+#
+# There is no single artifact that runs everywhere: this is native code linked
+# against OpenGL and Tcl/Tk. Each archive carries the program plus the Tcl
+# scripts and definition files it reads at run time, because without those it
+# starts and can then do nothing.
+#
+# macOS is absent, and not for want of trying: ElmerFront's non-Windows path is
+# an X11 program and macOS has no X11. The README says why in full.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build and attach to
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            os: ubuntu-24.04
+          - target: linux-arm64
+            os: ubuntu-24.04-arm
+          - target: windows-x86_64
+            os: windows-2022
+            mingw: true
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: dependencies (linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev libglu1-mesa-dev tcl-dev tk-dev libx11-dev
+
+      - name: dependencies (mingw)
+        if: matrix.mingw
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-tcl
+            mingw-w64-ucrt-x86_64-tk
+
+      - name: build and test
+        if: '!matrix.mingw'
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=dist/elmerfront-${{ matrix.target }}
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+          cmake --install build
+
+      - name: build and test (mingw)
+        if: matrix.mingw
+        shell: msys2 {0}
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=dist/elmerfront-${{ matrix.target }}
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+          cmake --install build
+
+      # The archive has to run on a machine that has never seen MSYS2.
+      # Resolved with ldd rather than listed by hand, so a dependency added
+      # later is picked up instead of missed.
+      - name: bundle the windows runtime
+        if: matrix.mingw
+        shell: msys2 {0}
+        run: |
+          set -e
+          d="dist/elmerfront-${{ matrix.target }}/bin"
+          mkdir -p "$d"
+          for exe in "$d"/*.exe; do
+            [ -f "$exe" ] || continue
+            ldd "$exe" | awk '{print $3}' | grep -i '^/ucrt64/bin/' | while read -r dll; do
+              cp -n "$dll" "$d/" || true
+            done
+          done
+          # Tcl and Tk load their own script libraries at run time, so the DLL
+          # alone is not enough.
+          cp -r /ucrt64/lib/tcl8.6 /ucrt64/lib/tk8.6 "dist/elmerfront-${{ matrix.target }}/lib/" 2>/dev/null || {
+            mkdir -p "dist/elmerfront-${{ matrix.target }}/lib"
+            cp -r /ucrt64/lib/tcl8.6 /ucrt64/lib/tk8.6 "dist/elmerfront-${{ matrix.target }}/lib/"
+          }
+          echo "bundled DLLs:"; ls "$d"/*.dll 2>/dev/null | wc -l
+
+      - name: package
+        shell: bash
+        run: |
+          set -e
+          d="dist/elmerfront-${{ matrix.target }}"
+          mkdir -p "$d"
+          cp README.md "$d/" 2>/dev/null || true
+
+          # An archive without the program, or without the Tcl scripts it loads
+          # at startup, is worse than a failed build because it looks like a
+          # release. Checked before anything is uploaded.
+          exe=$(find "$d" -name 'ElmerFront' -type f -o -name 'ElmerFront.exe' -type f | head -1)
+          [ -n "$exe" ] || { echo "::error::no ElmerFront binary in the archive"; exit 1; }
+          find "$d" -name 'ecif_tcl_mainScript.tcl' | grep -q . \
+            || { echo "::error::no tcl scripts in the archive; ElmerFront would start and do nothing"; exit 1; }
+          echo "binary: $exe"
+          ls -lR "$d" | head -40
+
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "elmerfront-${{ matrix.target }}.zip" "elmerfront-${{ matrix.target }}"
+          else
+            tar czf "elmerfront-${{ matrix.target }}.tar.gz" "elmerfront-${{ matrix.target }}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: elmerfront-${{ matrix.target }}
+          path: dist/elmerfront-*.*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: list what will be published
+        run: ls -lR dist
+
+      - name: attach to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: dist/**/elmerfront-*.*
