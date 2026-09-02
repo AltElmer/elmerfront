@@ -96,13 +96,21 @@ jobs:
               cp -n "$dll" "$d/" || true
             done
           done
-          # Tcl and Tk load their own script libraries at run time, so the DLL
-          # alone is not enough.
-          cp -r /ucrt64/lib/tcl8.6 /ucrt64/lib/tk8.6 "dist/elmerfront-${{ matrix.target }}/lib/" 2>/dev/null || {
-            mkdir -p "dist/elmerfront-${{ matrix.target }}/lib"
-            cp -r /ucrt64/lib/tcl8.6 /ucrt64/lib/tk8.6 "dist/elmerfront-${{ matrix.target }}/lib/"
-          }
-          echo "bundled DLLs:"; ls "$d"/*.dll 2>/dev/null | wc -l
+          # Tcl and Tk load their own script libraries at run time, so the DLLs
+          # alone are not enough. The directories are versioned, so they are
+          # found rather than named: an earlier version of this hard-coded
+          # tcl8.6 and tk8.6 and failed the whole job when the copy did not
+          # match.
+          libdst="dist/elmerfront-${{ matrix.target }}/lib"
+          mkdir -p "$libdst"
+          found=0
+          for d2 in /ucrt64/lib/tcl[0-9]* /ucrt64/lib/tk[0-9]*; do
+            [ -d "$d2" ] || continue
+            cp -r "$d2" "$libdst/" && found=$((found+1))
+          done
+          echo "tcl/tk script libraries copied: $found"
+          [ "$found" -ge 2 ] || { echo "::error::expected a tcl and a tk script library, found $found"; exit 1; }
+          echo "bundled DLLs: $(ls "$d"/*.dll 2>/dev/null | wc -l)"
 
       - name: package
         shell: bash
@@ -120,7 +128,7 @@ jobs:
           find "$d" -name 'ecif_tcl_mainScript.tcl' | grep -q . \
             || { echo "::error::no tcl scripts in the archive; ElmerFront would start and do nothing"; exit 1; }
           echo "binary: $exe"
-          ls -lR "$d" | head -40
+          { ls -lR "$d" || true; } | head -40 || true
 
           cd dist
           if [ "${{ runner.os }}" = "Windows" ]; then
