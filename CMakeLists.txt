@@ -2,7 +2,11 @@ CMAKE_MINIMUM_REQUIRED(VERSION 3.16)
 # C as well as C++: ElmerFront itself is C++, but matc is C and, as a
 # subdirectory, it takes its enabled languages from here rather than from its
 # own standalone block.
-PROJECT(ElmerFront VERSION 5.4.0 LANGUAGES C CXX)
+# ElmerFront had a version line of its own that stopped at 5.4.0, shipped with
+# Elmer 5.4 and recorded in that release's notes as "front 5.4.0". This
+# continues it rather than restarting at 1.0.0 and pretending the previous
+# twenty years did not happen.
+PROJECT(ElmerFront VERSION 5.5.0 LANGUAGES C CXX)
 
 # ElmerFront was an autotools project when Elmer removed it in 2016. Elmer had
 # already moved to CMake by then and deleted front's autotools files alongside
