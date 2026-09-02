@@ -622,7 +622,7 @@ UserInterface_TCL::createTclEnvironment(Hinst application)
 
   // *** Invoke application-specific initialization.
   if (My_Tcl_AppInit(interp) != TCL_OK) {
-    WishPanic("My_Tcl_AppInit failed: %s\n", interp->result);
+    WishPanic("My_Tcl_AppInit failed: %s\n", Tcl_GetStringResult(interp));
   }
 
   // Result value is the Tcl interpreter
@@ -4685,11 +4685,11 @@ UserInterface_TCL::sendCommandToGui(Tcl_Interp* interp, const char* cmd, const c
     Tcl_DStringFree( &dstring );
   }
 
-  if (interp->result[0] != '\0') {
+  if (Tcl_GetStringResult(interp)[0] != '\0') {
 
     char err_buf[256];
     err_buf[255] = '\0';
-    strncpy(err_buf, interp->result, 255);
+    strncpy(err_buf, Tcl_GetStringResult(interp), 255);
 
     char cmd_buf[256];
     cmd_buf[255] = '\0';
@@ -5350,10 +5350,13 @@ UserInterface_TCL::start(int argc, char** argv)
   //--If we can't load the script (= start CONTROL-SIDE interpreter)
   if (code != TCL_OK) {
 
-    char* p = (char *)Tcl_GetVar(theInterp, "errorInfo", glob_flag);
+    // const, because both Tcl_GetVar and Tcl_GetStringResult return storage
+    // owned by the interpreter and p is only ever read below. The cast that
+    // used to be here threw the const away for no reason.
+    const char* p = Tcl_GetVar(theInterp, "errorInfo", glob_flag);
 
     if ((p == NULL) || (*p == '\0')) {
-      p = theInterp->result;
+      p = Tcl_GetStringResult(theInterp);
     }
 
     ((ofstream*)debugFile)->open("ElmerFront.log", ios::out);

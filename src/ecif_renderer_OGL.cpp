@@ -323,9 +323,16 @@ Renderer_OGL::createData()
   selectionBuffer = new GLuint[selectionBufferSize];
   selectionHits = 0;
 
-  Color4 current_color = {0.0f, 0.0f, 0.0f, 1.0f};  // black
-  Color4 mesh_color    = {0.0f, 0.0f, 0.0f, 1.0f};  // black
-  Color4 select_color  = {1.0f, 1.0f, 1.0f, 1.0f};  // white
+  // Color4f, not Color4. Color4 is "int[4]" and Color4f is "float[4]"; these
+  // three are copied straight into currentColor, meshColor and selectColor,
+  // which the renderer declares as Color4f and hands to glMaterialfv, so float
+  // is what they have to be. Declared as int since 2005, which C++11 rejects
+  // as a narrowing conversion in a braced initialiser. It was harmless in
+  // practice only because 0.0 and 1.0 survive a round trip through int; any
+  // other colour written here would have been silently truncated.
+  Color4f current_color = {0.0f, 0.0f, 0.0f, 1.0f};  // black
+  Color4f mesh_color    = {0.0f, 0.0f, 0.0f, 1.0f};  // black
+  Color4f select_color  = {1.0f, 1.0f, 1.0f, 1.0f};  // white
 
   // Set initial values colors
   for (int i = 0; i < 4; i++) {

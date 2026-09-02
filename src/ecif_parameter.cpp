@@ -270,9 +270,17 @@ Parameter::create_fields()
         strcpy(tmp, data_strings[nof_strings]);
         tmp[old_len] = ' ';
         strcpy(tmp + old_len + 1, data_buffer);
-        delete data_strings[nof_strings];
+        // delete[], because tmp and everything else in data_strings comes from
+        // new char[]. Pairing new[] with plain delete is undefined behaviour,
+        // and the sibling branch below already uses delete[].
+        delete[] data_strings[nof_strings];
         data_strings[nof_strings] = tmp;
-        data_strings[old_len + len + 2] = '\0';
+        // tmp, not data_strings. As written this assigned '\0' to an element
+        // of a char** far past its end: the null character converts to a null
+        // pointer, so it compiled silently in 2005 and corrupted whatever
+        // followed the array. The buffer is already terminated by the strcpy
+        // above; this writes the last byte of the allocation.
+        tmp[old_len + len + 2] = '\0';
 
       // New data
       } else {

@@ -1,0 +1,6 @@
+[submodule "eio"]
+	path = eio
+	url = https://github.com/AltElmer/eio.git
+[submodule "matc"]
+	path = matc
+	url = https://github.com/AltElmer/matc.git

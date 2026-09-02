@@ -2748,7 +2748,11 @@ LibFrontReader::getNextNumber_impl(T& number)
   strstream strm;
   strm << tokenBuffer;
 
-  return ( strm >> number );
+  // C++98 gave streams an implicit conversion to void*, so returning the
+  // stream from a bool function worked. C++11 replaced it with an explicit
+  // operator bool, which means the conversion has to be written out. Same
+  // meaning: true when the extraction did not fail.
+  return static_cast<bool>( strm >> number );
 }
 
 

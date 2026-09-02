@@ -1,0 +1,178 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The full program: core library, OpenGL renderer, Tcl/Tk interface, and a
+  # start-up test.
+  gui:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64 (gcc)
+            os: ubuntu-24.04
+          - name: linux-arm64 (gcc)
+            os: ubuntu-24.04-arm
+          - name: linux-x86_64 (clang)
+            os: ubuntu-24.04
+            cmake-extra: -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
+            apt-clang: true
+          - name: linux-x86_64 (intel icpx)
+            os: ubuntu-24.04
+            intel: true
+            cmake-extra: -DCMAKE_CXX_COMPILER=icpx -DCMAKE_C_COMPILER=icx
+          - name: macos-arm64 (clang)
+            os: macos-14
+            brew: true
+          - name: windows-x86_64 (mingw)
+            os: windows-2022
+            mingw: true
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: dependencies (linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1-mesa-dev libglu1-mesa-dev \
+            tcl-dev tk-dev \
+            libx11-dev
+
+      - name: clang (linux)
+        if: matrix.apt-clang
+        run: sudo apt-get install -y clang
+
+      # Intel's compiler is here because the brief was every compiler,
+      # proprietary ones included, not only the free ones.
+      - name: intel oneapi
+        if: matrix.intel
+        run: |
+          wget -qO- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB \
+            | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" \
+            | sudo tee /etc/apt/sources.list.d/oneAPI.list
+          sudo apt-get update
+          sudo apt-get install -y intel-oneapi-compiler-dpcpp-cpp
+          echo "/opt/intel/oneapi/compiler/latest/bin" >> "$GITHUB_PATH"
+
+      - name: dependencies (macos)
+        if: matrix.brew
+        run: brew install tcl-tk
+
+      - name: dependencies (mingw)
+        if: matrix.mingw
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-tcl
+            mingw-w64-ucrt-x86_64-tk
+
+      - name: build and test
+        if: '!matrix.mingw'
+        run: |
+          source /opt/intel/oneapi/setvars.sh 2>/dev/null || true
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake-extra }}
+          cmake --build build --config Release
+          ctest --test-dir build -C Release --output-on-failure
+        shell: bash
+
+      - name: build and test (mingw)
+        if: matrix.mingw
+        shell: msys2 {0}
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+
+      - name: the executable and the core library must both exist
+        shell: bash
+        run: |
+          set -e
+          exe=$(find build -name 'ElmerFront' -type f -o -name 'ElmerFront.exe' -type f | head -1)
+          lib=$(find build -name 'libelmerfront_core.a' -o -name 'elmerfront_core.lib' | head -1)
+          echo "executable   : ${exe:-MISSING}"
+          echo "core library : ${lib:-MISSING}"
+          [ -n "$exe" ] || { echo "::error::ElmerFront was not built"; exit 1; }
+          [ -n "$lib" ] || { echo "::error::the core library was not built"; exit 1; }
+
+  # The 59 platform neutral sources on their own, with no OpenGL and no Tcl/Tk.
+  # MSVC and clang-cl are here rather than in the matrix above because neither
+  # Windows toolchain has a Tcl/Tk development package that can be installed in
+  # a job without building it first. This is a real gap, and stating it as a
+  # separate job rather than dropping those compilers keeps it visible.
+  core:
+    name: core only, ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x86_64 (msvc)
+            os: windows-2022
+          - name: windows-x86_64 (clang-cl)
+            os: windows-2022
+            cmake-extra: -T ClangCL
+          - name: linux-x86_64 (gcc)
+            os: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: build the core library only
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DELMERFRONT_BUILD_GUI=OFF ${{ matrix.cmake-extra }}
+          cmake --build build --config Release
+
+      # ELMERFRONT_BUILD_GUI=OFF must actually mean no GUI. If the executable
+      # appeared here the option would be doing nothing and this job would be
+      # silently testing something else.
+      - name: no executable may have been built
+        shell: bash
+        run: |
+          lib=$(find build -name 'libelmerfront_core.a' -o -name 'elmerfront_core.lib' | head -1)
+          exe=$(find build -name 'ElmerFront' -type f -o -name 'ElmerFront.exe' -type f | head -1)
+          echo "core library : ${lib:-MISSING}"
+          echo "executable   : ${exe:-none, as expected}"
+          [ -n "$lib" ] || { echo "::error::the core library was not built"; exit 1; }
+          [ -z "$exe" ] || { echo "::error::an executable was built with the GUI switched off"; exit 1; }
+
+  # A clone without --recurse-submodules must say so clearly rather than
+  # failing somewhere inside CMake with a message about a missing target.
+  missing-submodules:
+    name: a clone without submodules explains itself
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: configure must fail with the instruction, not a CMake internal error
+        run: |
+          if cmake -S . -B build 2> err.txt; then
+            echo "::error::configure succeeded without the submodules"; exit 1
+          fi
+          cat err.txt
+          grep -q 'git submodule update --init' err.txt \
+            || { echo "::error::the message did not tell the user what to run"; exit 1; }
+          echo "ok"
